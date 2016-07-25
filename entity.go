@@ -34,4 +34,3 @@ func NewBytesEntity(t string, b []byte) *BytesEntity {
 func (e BytesEntity) ContentType() string {
   return e.contentType
 }
-

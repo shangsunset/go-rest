@@ -21,6 +21,7 @@ type Config struct {
   UserAgent     string
   Endpoint      string
   TraceRegexps  []*regexp.Regexp
+  Debug         bool
 }
 
 /**
@@ -43,12 +44,22 @@ type Service struct {
 func NewService(c Config) *Service {
   
   s := &Service{}
-  s.name = c.Name
   s.instance = c.Instance
   s.hostname = c.Hostname
   s.userAgent = c.UserAgent
   s.port = c.Endpoint
   s.router = mux.NewRouter()
+  
+  if c.Name == "" {
+    s.name = "service"
+  }else{
+    s.name = c.Name
+  }
+  
+  var debug bool
+  if c.Debug || os.Getenv("GOREST_DEBUG") == "true" {
+    s.debug = true
+  }
   
   if c.TraceRegexps != nil {
     s.traceRequests = make(map[string]*regexp.Regexp)
@@ -79,6 +90,6 @@ func (s *Service) Run() error {
     WriteTimeout: 30 * time.Second,
   }
   
-  alt.Debugf("service: Listening for %v on %v", s.name, s.port)
+  alt.Debugf("%s: Listening on %v", s.name, s.port)
   return server.ListenAndServe()
 }

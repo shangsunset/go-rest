@@ -116,41 +116,47 @@ func (c *Context) handle(rsp http.ResponseWriter, req *Request, f Handler) {
     where = req.URL.Path
   }
   
+  // where is this request endpoint, including parameters
+  var where string
+  if q := req.URL.Query(); q != nil && len(q) > 0 {
+    where = fmt.Sprintf("%s?%v", req.URL.Path, q.Encode())
+  }else{
+    where = req.URL.Path
+  }
+  
   // determine if we need to trace the request
   trace := false
-  if c.service.debug {
-    if c.service.traceRequests != nil && len(c.service.traceRequests) > 0 {
-      for _, e := range c.service.traceRequests {
-        if e.MatchString(req.URL.Path) {
-          alt.Debugf("service: [%s] (trace:%v) %s %s ", req.RemoteAddr, e, req.Method, where)
-          
-          if req.Header != nil {
-            for k, v := range req.Header {
-              if strings.EqualFold(k, "Authorization") {
-                alt.Debugf("  < %v: <%v suppressed>", k, len(v))
-              }else{
-                alt.Debugf("  < %v: %v", k, v)
-              }
+  if c.service.traceRequests != nil && len(c.service.traceRequests) > 0 {
+    for _, e := range c.service.traceRequests {
+      if e.MatchString(req.URL.Path) {
+        alt.Debugf("%s: [%s] (trace:%v) %s %s ", c.service.name, req.RemoteAddr, e, req.Method, where)
+        
+        if req.Header != nil {
+          for k, v := range req.Header {
+            if strings.EqualFold(k, "Authorization") {
+              alt.Debugf("  < %v: <%v suppressed>", k, len(v))
+            }else{
+              alt.Debugf("  < %v: %v", k, v)
             }
           }
-          
-          if req.Body != nil {
-            data, err := ioutil.ReadAll(req.Body)
-            if err != nil {
-              c.sendResponse(rsp, req, nil, NewError(http.StatusInternalServerError, err))
-              return 
-            }
-            alt.Debugf("  <")
-            if data != nil && len(data) > 0 {
-              alt.Debugf("  < %s", string(data))
-            }
-            req.Body = ioutil.NopCloser(bytes.NewBuffer(data))
-          }
-          
-          alt.Debugf("  -")
-          trace = true
-          break
         }
+        
+        if req.Body != nil {
+          data, err := ioutil.ReadAll(req.Body)
+          if err != nil {
+            c.sendResponse(rsp, req, nil, NewError(http.StatusInternalServerError, err))
+            return 
+          }
+          alt.Debugf("  <")
+          if data != nil && len(data) > 0 {
+            alt.Debugf("  < %s", string(data))
+          }
+          req.Body = ioutil.NopCloser(bytes.NewBuffer(data))
+        }
+        
+        alt.Debugf("  -")
+        trace = true
+        break
       }
     }
   }
@@ -172,6 +178,7 @@ func (c *Context) handle(rsp http.ResponseWriter, req *Request, f Handler) {
   res, err := f(rsp, req)
   if (req.flags & reqFlagFinalized) != reqFlagFinalized {
     c.sendResponse(rsp, req, res, err)
+    alt.Debugf("%s: [%v] (%v) %s %s", c.service.name, req.Id, duration, req.Method, where)
     if trace { // check for a trace and output the response
       recorder := httptest.NewRecorder()
       c.sendResponse(recorder, req, res, err)
@@ -203,10 +210,10 @@ func (c *Context) sendResponse(rsp http.ResponseWriter, req *Request, res interf
   }else{
     switch cerr := err.(type) {
       case *Error:
-        alt.Errorf("service: %v", cerr.Cause)
+        alt.Errorf("%s: %v", c.service.name, cerr.Cause)
         c.sendEntity(rsp, req, cerr.Status, cerr.Headers, cerr.Cause)
       default:
-        alt.Errorf("service: %v", err)
+        alt.Errorf("%s: %v", c.service.name, err)
         c.sendEntity(rsp, req, http.StatusInternalServerError, nil, err)
     }
   }
@@ -238,7 +245,7 @@ func (c *Context) sendEntity(rsp http.ResponseWriter, req *Request, status int, 
       
       n, err := io.Copy(rsp, e)
       if err != nil {
-        alt.Errorf("service: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes written", err, req.Method, req.URL, n)
+        alt.Errorf("%s: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes written", c.service.name, err, req.Method, req.URL, n)
         return
       }
       
@@ -248,7 +255,7 @@ func (c *Context) sendEntity(rsp http.ResponseWriter, req *Request, status int, 
       
       _, err := rsp.Write([]byte(e))
       if err != nil {
-        alt.Errorf("service: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes", err, req.Method, req.URL, len(e))
+        alt.Errorf("%s: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes", c.service.name, err, req.Method, req.URL, len(e))
         return
       }
       
@@ -258,13 +265,13 @@ func (c *Context) sendEntity(rsp http.ResponseWriter, req *Request, status int, 
       
       data, err := json.Marshal(content)
       if err != nil {
-        alt.Errorf("service: Could not marshal entity: %v\nIn response to: %v %v", err, req.Method, req.URL)
+        alt.Errorf("%s: Could not marshal entity: %v\nIn response to: %v %v", c.service.name, err, req.Method, req.URL)
         return
       }
       
       _, err = rsp.Write(data)
       if err != nil {
-        alt.Errorf("service: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes", err, req.Method, req.URL, len(data))
+        alt.Errorf("%s: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes", c.service.name, err, req.Method, req.URL, len(data))
         return
       }
       
