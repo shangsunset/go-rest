@@ -10,13 +10,7 @@ You can configure it by passing an option struct to cors.New:
         AllowCredentials: true,
     })
 
-Then insert the handler in the chain:
-
-    handler = c.Handler(handler)
-
 See Options documentation for more options.
-
-The resulting handler is a standard net/http handler.
 */
 package cors
 
@@ -26,6 +20,10 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+)
+
+import (
+	"github.com/bww/go-rest"
 )
 
 // Options is a configuration container to setup the CORS middleware.
@@ -165,67 +163,36 @@ func Default() *Cors {
 	return New(Options{})
 }
 
-// Handler apply the CORS specification on the request, and add relevant CORS headers
-// as necessary.
-func (c *Cors) Handler(h http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "OPTIONS" {
-			c.logf("Handler: Preflight request")
-			c.handlePreflight(w, r)
-			// Preflight requests are standalone and should stop the chain as some other
-			// middleware may not handle OPTIONS requests correctly. One typical example
-			// is authentication middleware ; OPTIONS requests won't carry authentication
-			// headers (see #1)
-			if c.optionPassthrough {
-				h.ServeHTTP(w, r)
-			}
-		} else {
-			c.logf("Handler: Actual request")
-			c.handleActualRequest(w, r)
-			h.ServeHTTP(w, r)
-		}
-	})
-}
-
-// HandlerFunc provides Martini compatible handler
-func (c *Cors) HandlerFunc(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "OPTIONS" {
-		c.logf("HandlerFunc: Preflight request")
-		c.handlePreflight(w, r)
-	} else {
-		c.logf("HandlerFunc: Actual request")
-		c.handleActualRequest(w, r)
-	}
-}
-
-// Negroni compatible interface
-func (c *Cors) ServeHTTP(w http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
-	if r.Method == "OPTIONS" {
-		c.logf("ServeHTTP: Preflight request")
-		c.handlePreflight(w, r)
-		// Preflight requests are standalone and should stop the chain as some other
-		// middleware may not handle OPTIONS requests correctly. One typical example
-		// is authentication middleware ; OPTIONS requests won't carry authentication
-		// headers (see #1)
-		if c.optionPassthrough {
-			next(w, r)
+/**
+ * Go/Rest compatible handler
+ */
+func (c *Cors) ServeRequest(rsp http.ResponseWriter, req *rest.Request, pln rest.Pipeline) (interface{}, error) {
+	if req.Method == "OPTIONS" {
+		err := c.handlePreflight(rsp, req.Request)
+		if err != nil {
+			return nil, err
+		}else{
+			return nil, nil // stop processing here on pre-flight
 		}
 	} else {
-		c.logf("ServeHTTP: Actual request")
-		c.handleActualRequest(w, r)
-		next(w, r)
+		err := c.handleActualRequest(rsp, req.Request)
+		if err != nil {
+			return nil, err
+		}else{
+			return pln.Next(rsp, req)
+		}
 	}
 }
 
 // handlePreflight handles pre-flight CORS requests
-func (c *Cors) handlePreflight(w http.ResponseWriter, r *http.Request) {
+func (c *Cors) handlePreflight(w http.ResponseWriter, r *http.Request) *rest.Error {
 	headers := w.Header()
 	origin := r.Header.Get("Origin")
 
 	if r.Method != "OPTIONS" {
-		c.logf("  Preflight aborted: %s!=OPTIONS", r.Method)
-		return
+		return rest.NewErrorf(http.StatusBadRequest, "Invalid request method for pre-flight: %v", r.Method)
 	}
+	
 	// Always set Vary headers
 	// see https://github.com/rs/cors/issues/10,
 	//     https://github.com/rs/cors/commit/dbdca4d95feaa7511a46e6f1efb3b3aa505bc43f#commitcomment-12352001
@@ -234,61 +201,57 @@ func (c *Cors) handlePreflight(w http.ResponseWriter, r *http.Request) {
 	headers.Add("Vary", "Access-Control-Request-Headers")
 
 	if origin == "" {
-		c.logf("  Preflight aborted: empty origin")
-		return
+		return rest.NewErrorf(http.StatusBadRequest, "No origin provided")
 	}
 	if !c.isOriginAllowed(origin) {
-		c.logf("  Preflight aborted: origin '%s' not allowed", origin)
-		return
+		return rest.NewErrorf(http.StatusBadRequest, "Origin is not permitted: %v", origin)
 	}
 
 	reqMethod := r.Header.Get("Access-Control-Request-Method")
 	if !c.isMethodAllowed(reqMethod) {
-		c.logf("  Preflight aborted: method '%s' not allowed", reqMethod)
-		return
+		return rest.NewErrorf(http.StatusBadRequest, "Method is not permitted: %v", reqMethod)
 	}
 	reqHeaders := parseHeaderList(r.Header.Get("Access-Control-Request-Headers"))
 	if !c.areHeadersAllowed(reqHeaders) {
-		c.logf("  Preflight aborted: headers '%v' not allowed", reqHeaders)
-		return
+		return rest.NewErrorf(http.StatusBadRequest, "Headers not permitted: %v", reqHeaders)
 	}
+	
 	headers.Set("Access-Control-Allow-Origin", origin)
 	// Spec says: Since the list of methods can be unbounded, simply returning the method indicated
 	// by Access-Control-Request-Method (if supported) can be enough
 	headers.Set("Access-Control-Allow-Methods", strings.ToUpper(reqMethod))
 	if len(reqHeaders) > 0 {
-
 		// Spec says: Since the list of headers can be unbounded, simply returning supported headers
 		// from Access-Control-Request-Headers can be enough
 		headers.Set("Access-Control-Allow-Headers", strings.Join(reqHeaders, ", "))
 	}
+	
 	if c.allowCredentials {
 		headers.Set("Access-Control-Allow-Credentials", "true")
 	}
 	if c.maxAge > 0 {
 		headers.Set("Access-Control-Max-Age", strconv.Itoa(c.maxAge))
 	}
-	c.logf("  Preflight response headers: %v", headers)
+	
+	return nil
 }
 
 // handleActualRequest handles simple cross-origin requests, actual request or redirects
-func (c *Cors) handleActualRequest(w http.ResponseWriter, r *http.Request) {
+func (c *Cors) handleActualRequest(w http.ResponseWriter, r *http.Request) *rest.Error {
 	headers := w.Header()
 	origin := r.Header.Get("Origin")
 
 	if r.Method == "OPTIONS" {
-		c.logf("  Actual request no headers added: method == %s", r.Method)
-		return
+		return rest.NewErrorf(http.StatusBadRequest, "Invalid request method for post-flight: %v", origin)
 	}
+	
 	// Always set Vary, see https://github.com/rs/cors/issues/10
 	headers.Add("Vary", "Origin")
 	if origin == "" {
-		c.logf("  Actual request no headers added: missing origin")
-		return
+		return rest.NewErrorf(http.StatusBadRequest, "No origin provided")
 	}
 	if !c.isOriginAllowed(origin) {
-		c.logf("  Actual request no headers added: origin '%s' not allowed", origin)
-		return
+		return rest.NewErrorf(http.StatusBadRequest, "Origin is not permitted: %v", origin)
 	}
 
 	// Note that spec does define a way to specifically disallow a simple method like GET or
@@ -296,10 +259,9 @@ func (c *Cors) handleActualRequest(w http.ResponseWriter, r *http.Request) {
 	// spec doesn't instruct to check the allowed methods for simple cross-origin requests.
 	// We think it's a nice feature to be able to have control on those methods though.
 	if !c.isMethodAllowed(r.Method) {
-		c.logf("  Actual request no headers added: method '%s' not allowed", r.Method)
-
-		return
+		return rest.NewErrorf(http.StatusBadRequest, "Method is not permitted: %v", r.Method)
 	}
+	
 	headers.Set("Access-Control-Allow-Origin", origin)
 	if len(c.exposedHeaders) > 0 {
 		headers.Set("Access-Control-Expose-Headers", strings.Join(c.exposedHeaders, ", "))
@@ -307,7 +269,8 @@ func (c *Cors) handleActualRequest(w http.ResponseWriter, r *http.Request) {
 	if c.allowCredentials {
 		headers.Set("Access-Control-Allow-Credentials", "true")
 	}
-	c.logf("  Actual response added headers: %v", headers)
+	
+	return nil
 }
 
 // convenience method. checks if debugging is turned on before printing

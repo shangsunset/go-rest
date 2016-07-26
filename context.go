@@ -3,10 +3,12 @@ package rest
 import (
   "io"
   "fmt"
+  "time"
   "bytes"
   "strings"
   "io/ioutil"
   "encoding/json"
+  "encoding/base64"
 )
 
 import (
@@ -14,6 +16,7 @@ import (
   "net/http/httptest"
   "github.com/gorilla/mux"
   "github.com/bww/go-alert"
+  "bitbucket.org/madebymess/go-util"
 )
 
 /**
@@ -30,6 +33,7 @@ const (
  */
 type Request struct {
   *http.Request
+  Id    string
   Attrs map[string]interface{}
   flags requestFlags
 }
@@ -38,7 +42,8 @@ type Request struct {
  * Create a service request
  */
 func newRequest(r *http.Request) *Request {
-  return &Request{r, make(map[string]interface{}), 0}
+  id := util.TimeUUID()
+  return &Request{r, base64.RawURLEncoding.EncodeToString(id[:]), make(map[string]interface{}), 0}
 }
 
 /**
@@ -60,15 +65,60 @@ func (r *Request) Resource() string {
 }
 
 /**
- * Requst handler
+ * A handler pipeline
  */
-type Handler func(http.ResponseWriter, *Request)(interface{}, error)
+type Pipeline []Handler
 
 /**
- * Request interceptor
+ * Append a handler to the pipeline
  */
-type Interceptor interface {
-  Intercept(http.ResponseWriter, *Request)(error)
+func (p Pipeline) Add(h Handler) Pipeline {
+  if p == nil {
+    return Pipeline{h}
+  }
+  switch v := h.(type) {
+    case Pipeline:
+      return append(p, v...) // flatten and append
+    default:
+      return append(p, v)
+  }
+}
+
+/**
+ * Continue processing the pipeline
+ */
+func (p Pipeline) Next(w http.ResponseWriter, r *Request) (interface{}, error) {
+  if len(p) < 0 {
+    return nil, nil // empty pipline
+  }else{
+    return p[0].ServeRequest(w, r, p[1:])
+  }
+}
+
+/**
+ * Serve a request
+ */
+func (p Pipeline) ServeRequest(w http.ResponseWriter, r *Request, x Pipeline) (interface{}, error) {
+  return p.Next(w, r) // the parameter pipeline is ignored
+}
+
+/**
+ * Requst handler
+ */
+type Handler interface {
+  ServeRequest(http.ResponseWriter, *Request, Pipeline)(interface{}, error)
+}
+
+/**
+ * Requst handler
+ */
+type HandlerFunc func(http.ResponseWriter, *Request, Pipeline)(interface{}, error)
+
+/**
+ * Serve a request
+ */
+func (h HandlerFunc) ServeRequest(w http.ResponseWriter, r *Request, p Pipeline) (interface{}, error) {
+  return h(w, r, p)
 }
 
 /**
@@ -77,43 +127,54 @@ type Interceptor interface {
 type Context struct {
   service   *Service
   router    *mux.Router
-  intercept []Interceptor
+  pipeline  Pipeline
 }
 
 /**
  * Create a context
  */
-func newContext(s *Service, r *mux.Router, i []Interceptor) *Context {
-  return &Context{s, r, i}
+func newContext(s *Service, r *mux.Router) *Context {
+  return &Context{s, r, nil}
+}
+
+/**
+ * Attach a handler to the context pipeline
+ */
+func (c *Context) Use(h ...Handler) {
+  if h != nil {
+    for _, e := range h {
+      c.pipeline = c.pipeline.Add(e)
+    }
+  }
 }
 
 /**
  * Create a route
  */
-func (c *Context) HandleFunc(p string, f Handler) *mux.Route {
-  return c.router.HandleFunc(p, func(rsp http.ResponseWriter, req *http.Request){
-    c.handle(rsp, newRequest(req), f)
+func (c *Context) HandleFunc(u string, f func(http.ResponseWriter, *Request, Pipeline)(interface{}, error)) *mux.Route {
+  return c.Handle(u, c.pipeline.Add(HandlerFunc(f)))
+}
+
+/**
+ * Create a route
+ */
+func (c *Context) Handle(u string, h Handler) *mux.Route {
+  return c.router.HandleFunc(u, func(rsp http.ResponseWriter, req *http.Request){
+    c.handle(rsp, newRequest(req), h)
   })
 }
 
 /**
  * Handle a request
  */
-func (c *Context) handle(rsp http.ResponseWriter, req *Request, f Handler) {
+func (c *Context) handle(rsp http.ResponseWriter, req *Request, h Handler) {
+  start := time.Now()
   
   // deal with proxies
   if r := req.Header.Get("X-Forwarded-For"); r != "" {
     req.RemoteAddr = r
   }else if r = req.Header.Get("X-Origin-IP"); r != "" {
     req.RemoteAddr = r
-  }
-  
-  // where is this request endpoint, including parameters
-  var where string
-  if q := req.URL.Query(); q != nil && len(q) > 0 {
-    where = fmt.Sprintf("%s?%v", req.URL.Path, q.Encode())
-  }else{
-    where = req.URL.Path
   }
   
   // where is this request endpoint, including parameters
@@ -161,24 +222,11 @@ func (c *Context) handle(rsp http.ResponseWriter, req *Request, f Handler) {
     }
   }
   
-  // execute interceptors, if we have any
-  if c.intercept != nil {
-    for _, e := range c.intercept {
-      err := e.Intercept(rsp, req)
-      if err != nil {
-        if (req.flags & reqFlagFinalized) != reqFlagFinalized {
-          c.sendResponse(rsp, req, nil, err)
-          return
-        }
-      }
-    }
-  }
-  
   // handle the request itself and finalize if needed
-  res, err := f(rsp, req)
+  res, err := h.ServeRequest(rsp, req, nil)
   if (req.flags & reqFlagFinalized) != reqFlagFinalized {
     c.sendResponse(rsp, req, res, err)
-    alt.Debugf("%s: [%v] (%v) %s %s", c.service.name, req.Id, duration, req.Method, where)
+    alt.Debugf("%s: [%v] (%v) %s %s", c.service.name, req.Id, time.Since(start), req.Method, where)
     if trace { // check for a trace and output the response
       recorder := httptest.NewRecorder()
       c.sendResponse(recorder, req, res, err)

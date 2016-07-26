@@ -1,6 +1,7 @@
 package rest
 
 import (
+  "os"
   "time"
   "regexp"
   "net/http"
@@ -56,7 +57,6 @@ func NewService(c Config) *Service {
     s.name = c.Name
   }
   
-  var debug bool
   if c.Debug || os.Getenv("GOREST_DEBUG") == "true" {
     s.debug = true
   }
@@ -74,8 +74,8 @@ func NewService(c Config) *Service {
 /**
  * Create a context
  */
-func (s *Service) Context(i []Interceptor) *Context {
-  return newContext(s, s.router.NewRoute().Subrouter(), i)
+func (s *Service) Context() *Context {
+  return newContext(s, s.router.NewRoute().Subrouter())
 }
 
 /**
