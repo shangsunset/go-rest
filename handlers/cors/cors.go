@@ -273,13 +273,6 @@ func (c *Cors) handleActualRequest(w http.ResponseWriter, r *http.Request) *rest
 	return nil
 }
 
-// convenience method. checks if debugging is turned on before printing
-func (c *Cors) logf(format string, a ...interface{}) {
-	if c.Log != nil {
-		c.Log.Printf(format, a...)
-	}
-}
-
 // isOriginAllowed checks if a given origin is allowed to perform cross-domain requests
 // on the endpoint
 func (c *Cors) isOriginAllowed(origin string) bool {
