@@ -253,6 +253,7 @@ func (c *Context) handle(rsp http.ResponseWriter, req *Request, h Handler) {
  * Send a result
  */
 func (c *Context) sendResponse(rsp http.ResponseWriter, req *Request, res interface{}, err error) {
+  rsp.Header().Set("X-Request-Id", req.Id)
   if err == nil {
     c.sendEntity(rsp, req, http.StatusOK, nil, res)
   }else{
