@@ -75,7 +75,14 @@ func NewService(c Config) *Service {
  * Create a context
  */
 func (s *Service) Context() *Context {
-  return newContext(s, s.router.NewRoute().Subrouter())
+  return newContext(s, s.router)
+}
+
+/**
+ * Create a context scoped under a base path
+ */
+func (s *Service) ContextWithBasePath(p string) *Context {
+  return newContext(s, s.router.PathPrefix(p).Subrouter())
 }
 
 /**
