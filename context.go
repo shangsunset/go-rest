@@ -47,16 +47,25 @@ func (c *Context) Use(h ...Handler) {
 /**
  * Create a route
  */
-func (c *Context) HandleFunc(u string, f func(http.ResponseWriter, *Request, Pipeline)(interface{}, error)) *mux.Route {
-  return c.Handle(u, c.pipeline.Add(HandlerFunc(f)))
+func (c *Context) HandleFunc(u string, f func(http.ResponseWriter, *Request, Pipeline)(interface{}, error), a ...Attrs) *mux.Route {
+  return c.Handle(u, c.pipeline.Add(HandlerFunc(f)), a...)
 }
 
 /**
  * Create a route
  */
-func (c *Context) Handle(u string, h Handler) *mux.Route {
+func (c *Context) Handle(u string, h Handler, a ...Attrs) *mux.Route {
+  var attr Attrs
+  if a != nil {
+    attr = make(Attrs)
+    for _, e := range a {
+      for k, v := range e {
+        attr[k] = v
+      }
+    }
+  }
   return c.router.HandleFunc(u, func(rsp http.ResponseWriter, req *http.Request){
-    c.handle(rsp, newRequest(req), h)
+    c.handle(rsp, newRequestWithAttributes(req, attr), h)
   })
 }
 

@@ -12,6 +12,11 @@ import (
 )
 
 /**
+ * Attributes
+ */
+type Attrs map[string]interface{}
+
+/**
  * Internal request flags
  */
 type requestFlags uint32
@@ -26,7 +31,7 @@ const (
 type Request struct {
   *http.Request
   Id    string
-  Attrs map[string]interface{}
+  Attrs Attrs
   flags requestFlags
   start time.Time
 }
@@ -35,8 +40,15 @@ type Request struct {
  * Create a service request
  */
 func newRequest(r *http.Request) *Request {
+  return newRequestWithAttributes(r, nil)
+}
+
+/**
+ * Create a service request
+ */
+func newRequestWithAttributes(r *http.Request, a Attrs) *Request {
   id := util.TimeUUID()
-  return &Request{r, base64.RawURLEncoding.EncodeToString(id[:]), make(map[string]interface{}), 0, time.Now()}
+  return &Request{r, base64.RawURLEncoding.EncodeToString(id[:]), a, 0, time.Now()}
 }
 
 /**
