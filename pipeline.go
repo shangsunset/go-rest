@@ -70,17 +70,21 @@ func (r *Request) Resource() string {
 type Pipeline []Handler
 
 /**
- * Append a handler to the pipeline
+ * Copy this pipeline, append a handler and return the copy
  */
 func (p Pipeline) Add(h Handler) Pipeline {
   if p == nil {
     return Pipeline{h}
   }
+  
+  c := make(Pipeline, len(p))
+  copy(c, p)
+  
   switch v := h.(type) {
     case Pipeline:
-      return append(p, v...) // flatten and append
+      return append(c, v...) // flatten and append
     default:
-      return append(p, v)
+      return append(c, v)
   }
 }
 

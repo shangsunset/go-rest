@@ -12,20 +12,21 @@ type Error struct {
   Status    int
   Headers   map[string]string
   Cause     error
+  Detail    interface{}
 }
 
 /**
  * Create a status error
  */
 func NewError(s int, e error) *Error {
-  return &Error{s, nil, e}
+  return &Error{s, nil, e, nil}
 }
 
 /**
  * Create a status error
  */
 func NewErrorf(s int, f string, a ...interface{}) *Error {
-  return &Error{s, nil, basicError{s, fmt.Sprintf(f, a...)}}
+  return &Error{s, nil, basicError{s, fmt.Sprintf(f, a...)}, nil}
 }
 
 /**
@@ -33,6 +34,14 @@ func NewErrorf(s int, f string, a ...interface{}) *Error {
  */
 func (e *Error) SetHeaders(h map[string]string) *Error {
   e.Headers = h
+  return e
+}
+
+/**
+ * Set detail
+ */
+func (e *Error) SetDetail(d interface{}) *Error {
+  e.Detail = d
   return e
 }
 
