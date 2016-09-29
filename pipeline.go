@@ -17,6 +17,22 @@ import (
 type Attrs map[string]interface{}
 
 /**
+ * Merge attributes
+ */
+func mergeAttrs(a ...Attrs) Attrs {
+  var m Attrs
+  if a != nil {
+    m = make(Attrs)
+    for _, e := range a {
+      for k, v := range e {
+        m[k] = v
+      }
+    }
+  }
+  return m
+}
+
+/**
  * Internal request flags
  */
 type requestFlags uint32
@@ -49,6 +65,19 @@ func newRequest(r *http.Request) *Request {
 func newRequestWithAttributes(r *http.Request, a Attrs) *Request {
   id := util.TimeUUID()
   return &Request{r, base64.RawURLEncoding.EncodeToString(id[:]), a, 0, time.Now()}
+}
+
+/**
+ * Put attributes
+ */
+func (r *Request) putAttributes(a Attrs) {
+  if r.Attrs == nil {
+    r.Attrs = a
+  }else{
+    for k, v := range a {
+      r.Attrs[k] = v
+    }
+  }
 }
 
 /**

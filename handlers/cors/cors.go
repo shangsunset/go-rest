@@ -61,6 +61,8 @@ type Options struct {
 	OptionsPassthrough bool
 	// Debugging flag adds additional output to debug server side CORS issues
 	Debug bool
+	// Ignore CORS entirely when it's not requested (when no Origin header is provided)
+	AllowIgnoreCORS bool
 }
 
 // Cors http handler
@@ -82,20 +84,24 @@ type Cors struct {
 	// Normalized list of allowed methods
 	allowedMethods []string
 	// Normalized list of exposed headers
-	exposedHeaders    []string
-	allowCredentials  bool
-	maxAge            int
+	exposedHeaders []string
+	allowCredentials bool
+	maxAge int
 	optionPassthrough bool
+	allowIgnoreCORS bool
 }
 
 // New creates a new Cors handler with the provided options.
 func New(options Options) *Cors {
 	c := &Cors{
-		exposedHeaders:    convert(options.ExposedHeaders, http.CanonicalHeaderKey),
-		allowOriginFunc:   options.AllowOriginFunc,
-		allowCredentials:  options.AllowCredentials,
-		maxAge:            options.MaxAge,
-		optionPassthrough: options.OptionsPassthrough,
+		exposedHeaders:  		convert(options.ExposedHeaders, http.CanonicalHeaderKey),
+		allowOriginFunc:  	options.AllowOriginFunc,
+		allowCredentials: 	options.AllowCredentials,
+		allowedHeaders:			options.AllowedHeaders,
+		allowedOrigins:			options.AllowedOrigins,
+		maxAge:           	options.MaxAge,
+		optionPassthrough:	options.OptionsPassthrough,
+		allowIgnoreCORS:		options.AllowIgnoreCORS,
 	}
 	if options.Debug {
 		c.Log = log.New(os.Stdout, "[cors] ", log.LstdFlags)
@@ -186,9 +192,9 @@ func (c *Cors) ServeRequest(rsp http.ResponseWriter, req *rest.Request, pln rest
 
 // handlePreflight handles pre-flight CORS requests
 func (c *Cors) handlePreflight(w http.ResponseWriter, r *http.Request) *rest.Error {
-	headers := w.Header()
+	headers := make(http.Header)
 	origin := r.Header.Get("Origin")
-
+	
 	if r.Method != "OPTIONS" {
 		return rest.NewErrorf(http.StatusBadRequest, "Invalid request method for pre-flight: %v", r.Method)
 	}
@@ -199,14 +205,14 @@ func (c *Cors) handlePreflight(w http.ResponseWriter, r *http.Request) *rest.Err
 	headers.Add("Vary", "Origin")
 	headers.Add("Vary", "Access-Control-Request-Method")
 	headers.Add("Vary", "Access-Control-Request-Headers")
-
+	
 	if origin == "" {
 		return rest.NewErrorf(http.StatusBadRequest, "No origin provided")
 	}
 	if !c.isOriginAllowed(origin) {
 		return rest.NewErrorf(http.StatusBadRequest, "Origin is not permitted: %v", origin)
 	}
-
+	
 	reqMethod := r.Header.Get("Access-Control-Request-Method")
 	if !c.isMethodAllowed(reqMethod) {
 		return rest.NewErrorf(http.StatusBadRequest, "Method is not permitted: %v", reqMethod)
@@ -216,21 +222,24 @@ func (c *Cors) handlePreflight(w http.ResponseWriter, r *http.Request) *rest.Err
 		return rest.NewErrorf(http.StatusBadRequest, "Headers not permitted: %v", reqHeaders)
 	}
 	
-	headers.Set("Access-Control-Allow-Origin", origin)
-	// Spec says: Since the list of methods can be unbounded, simply returning the method indicated
-	// by Access-Control-Request-Method (if supported) can be enough
+	// Spec says: Since the list of methods can be unbounded, simply returning the method indicated by Access-Control-Request-Method (if supported) can be enough
 	headers.Set("Access-Control-Allow-Methods", strings.ToUpper(reqMethod))
+	// Spec says: Since the list of headers can be unbounded, simply returning supported headers from Access-Control-Request-Headers can be enough
 	if len(reqHeaders) > 0 {
-		// Spec says: Since the list of headers can be unbounded, simply returning supported headers
-		// from Access-Control-Request-Headers can be enough
 		headers.Set("Access-Control-Allow-Headers", strings.Join(reqHeaders, ", "))
 	}
 	
+	headers.Set("Access-Control-Allow-Origin", origin)
 	if c.allowCredentials {
 		headers.Set("Access-Control-Allow-Credentials", "true")
 	}
 	if c.maxAge > 0 {
 		headers.Set("Access-Control-Max-Age", strconv.Itoa(c.maxAge))
+	}
+	
+	// copy the headers over
+	for k, v := range headers {
+		w.Header()[k] = v
 	}
 	
 	return nil
@@ -243,6 +252,9 @@ func (c *Cors) handleActualRequest(w http.ResponseWriter, r *http.Request) *rest
 
 	if r.Method == "OPTIONS" {
 		return rest.NewErrorf(http.StatusBadRequest, "Invalid request method for post-flight: %v", origin)
+	}
+	if origin == "" && c.allowIgnoreCORS {
+		return nil // just ignore CORS bullshit if it's not requested by the client
 	}
 	
 	// Always set Vary, see https://github.com/rs/cors/issues/10

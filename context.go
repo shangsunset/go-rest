@@ -1,7 +1,6 @@
 package rest
 
 import (
-  "io"
   "fmt"
   "time"
   "bytes"
@@ -9,7 +8,6 @@ import (
   "io/ioutil"
   "net/http"
   "net/http/httptest"
-  "encoding/json"
 )
 
 import (
@@ -55,15 +53,7 @@ func (c *Context) HandleFunc(u string, f func(http.ResponseWriter, *Request, Pip
  * Create a route
  */
 func (c *Context) Handle(u string, h Handler, a ...Attrs) *mux.Route {
-  var attr Attrs
-  if a != nil {
-    attr = make(Attrs)
-    for _, e := range a {
-      for k, v := range e {
-        attr[k] = v
-      }
-    }
-  }
+  attr := mergeAttrs(a...)
   return c.router.HandleFunc(u, func(rsp http.ResponseWriter, req *http.Request){
     c.handle(rsp, newRequestWithAttributes(req, attr), h)
   })
@@ -110,7 +100,7 @@ func (c *Context) handle(rsp http.ResponseWriter, req *Request, h Handler) {
         if req.Body != nil {
           data, err := ioutil.ReadAll(req.Body)
           if err != nil {
-            c.sendResponse(rsp, req, nil, NewError(http.StatusInternalServerError, err))
+            c.service.sendResponse(rsp, req, nil, NewError(http.StatusInternalServerError, err))
             return 
           }
           alt.Debugf("  <")
@@ -130,11 +120,11 @@ func (c *Context) handle(rsp http.ResponseWriter, req *Request, h Handler) {
   // handle the request itself and finalize if needed
   res, err := h.ServeRequest(rsp, req, nil)
   if (req.flags & reqFlagFinalized) != reqFlagFinalized {
-    c.sendResponse(rsp, req, res, err)
+    c.service.sendResponse(rsp, req, res, err)
     alt.Debugf("%s: [%v] (%v) %s %s", c.service.name, req.Id, time.Since(start), req.Method, where)
     if trace { // check for a trace and output the response
       recorder := httptest.NewRecorder()
-      c.sendResponse(recorder, req, res, err)
+      c.service.sendResponse(recorder, req, res, err)
       
       alt.Debugf("  > %v %s", recorder.Code, http.StatusText(recorder.Code))
       if recorder.HeaderMap != nil {
@@ -150,85 +140,6 @@ func (c *Context) handle(rsp http.ResponseWriter, req *Request, h Handler) {
       
       alt.Debugf("  #")
     }
-  }
-  
-}
-
-/**
- * Send a result
- */
-func (c *Context) sendResponse(rsp http.ResponseWriter, req *Request, res interface{}, err error) {
-  rsp.Header().Set("X-Request-Id", req.Id)
-  if err == nil {
-    c.sendEntity(rsp, req, http.StatusOK, nil, res)
-  }else{
-    switch cerr := err.(type) {
-      case *Error:
-        alt.Errorf("%s: %v", c.service.name, cerr.Cause)
-        c.sendEntity(rsp, req, cerr.Status, cerr.Headers, cerr.Cause)
-      default:
-        alt.Errorf("%s: %v", c.service.name, err)
-        c.sendEntity(rsp, req, http.StatusInternalServerError, nil, basicError{http.StatusInternalServerError, err.Error()})
-    }
-  }
-}
-
-/**
- * Respond with an entity
- */
-func (c *Context) sendEntity(rsp http.ResponseWriter, req *Request, status int, headers map[string]string, content interface{}) {
-  
-  if headers != nil {
-    for k, v := range headers {
-      rsp.Header().Add(k, v)
-    }
-  }
-  
-  if ua := c.service.userAgent; ua != "" {
-    rsp.Header().Add("User-Agent", ua)
-  }
-  
-  switch e := content.(type) {
-    
-    case nil:
-      rsp.WriteHeader(status)
-    
-    case Entity:
-      rsp.Header().Add("Content-Type", e.ContentType())
-      rsp.WriteHeader(status)
-      
-      n, err := io.Copy(rsp, e)
-      if err != nil {
-        alt.Errorf("%s: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes written", c.service.name, err, req.Method, req.URL, n)
-        return
-      }
-      
-    case json.RawMessage:
-      rsp.Header().Add("Content-Type", "application/json")
-      rsp.WriteHeader(status)
-      
-      _, err := rsp.Write([]byte(e))
-      if err != nil {
-        alt.Errorf("%s: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes", c.service.name, err, req.Method, req.URL, len(e))
-        return
-      }
-      
-    default:
-      rsp.Header().Add("Content-Type", "application/json")
-      rsp.WriteHeader(status)
-      
-      data, err := json.Marshal(content)
-      if err != nil {
-        alt.Errorf("%s: Could not marshal entity: %v\nIn response to: %v %v", c.service.name, err, req.Method, req.URL)
-        return
-      }
-      
-      _, err = rsp.Write(data)
-      if err != nil {
-        alt.Errorf("%s: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes", c.service.name, err, req.Method, req.URL, len(data))
-        return
-      }
-      
   }
   
 }
