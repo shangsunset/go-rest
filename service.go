@@ -146,10 +146,10 @@ func (s *Service) sendResponse(rsp http.ResponseWriter, req *Request, res interf
   }else{
     switch cerr := err.(type) {
       case *Error:
-        alt.Errorf("%s: %v", s.name, cerr.Cause)
+        alt.Errorf("%s: [%v] %v", s.name, req.Id, cerr.Cause)
         s.sendEntity(rsp, req, cerr.Status, cerr.Headers, cerr.Cause)
       default:
-        alt.Errorf("%s: %v", s.name, err)
+        alt.Errorf("%s: [%v] %v", s.name, req.Id, err)
         s.sendEntity(rsp, req, http.StatusInternalServerError, nil, basicError{http.StatusInternalServerError, err.Error()})
     }
   }
