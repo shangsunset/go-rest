@@ -3,10 +3,11 @@ package rest
 import (
   "io"
   "os"
+  "fmt"
   "time"
   "regexp"
+  "strings"
   "net/http"
-  "encoding/json"
 )
 
 import (
@@ -24,6 +25,7 @@ type Config struct {
   UserAgent     string
   Endpoint      string
   TraceRegexps  []*regexp.Regexp
+  EntityHandler EntityHandler
   Debug         bool
 }
 
@@ -39,6 +41,7 @@ type Service struct {
   router        *mux.Router
   pipeline      Pipeline
   traceRequests map[string]*regexp.Regexp
+  entityHandler EntityHandler
   debug         bool
 }
 
@@ -53,6 +56,7 @@ func NewService(c Config) *Service {
   s.userAgent = c.UserAgent
   s.port = c.Endpoint
   s.router = mux.NewRouter()
+  s.entityHandler = c.EntityHandler
   
   if c.Name == "" {
     s.name = "service"
@@ -79,6 +83,13 @@ func NewService(c Config) *Service {
  */
 func (s *Service) Context() *Context {
   return newContext(s, s.router)
+}
+
+/**
+ * Create a subrouter that can be configured for specialized use
+ */
+func (s *Service) Subrouter(p string) *mux.Router {
+  return s.router.PathPrefix(p).Subrouter()
 }
 
 /**
@@ -117,6 +128,22 @@ func (s *Service) Run() error {
 }
 
 /**
+ * Display all routes in the service
+ */
+func (s *Service) DumpRoutes(w io.Writer) error {
+  return s.router.Walk(func(route *mux.Route, router *mux.Router, ancestors []*mux.Route) error {
+    p, err := route.GetPathTemplate()
+    if err != nil {
+      return err
+    }
+    fmt.Fprintf(w, "  %v", p)
+    fmt.Fprintln(w)
+    return nil
+  })
+  return nil
+}
+
+/**
  * Request handler
  */
 func (s *Service) ServeHTTP(rsp http.ResponseWriter, req *http.Request) {
@@ -144,14 +171,34 @@ func (s *Service) sendResponse(rsp http.ResponseWriter, req *Request, res interf
   if err == nil {
     s.sendEntity(rsp, req, http.StatusOK, nil, res)
   }else{
-    switch cerr := err.(type) {
-      case *Error:
-        alt.Errorf("%s: [%v] %v", s.name, req.Id, cerr.Cause)
-        s.sendEntity(rsp, req, cerr.Status, cerr.Headers, cerr.Cause)
-      default:
-        alt.Errorf("%s: [%v] %v", s.name, req.Id, err)
-        s.sendEntity(rsp, req, http.StatusInternalServerError, nil, basicError{http.StatusInternalServerError, err.Error()})
-    }
+    s.sendError(rsp, req, err)
+  }
+}
+
+/**
+ * Respond with an error
+ */
+func (s *Service) sendError(rsp http.ResponseWriter, req *Request, err error) {
+  var r int
+  var c error
+  var h map[string]string
+  
+  switch cerr := err.(type) {
+    case *Error:
+      r = cerr.Status
+      h = cerr.Headers
+      c = cerr.Cause
+      alt.Errorf("%s: [%v] %v", s.name, req.Id, cerr.Cause)
+    default:
+      r = http.StatusInternalServerError
+      c = basicError{http.StatusInternalServerError, err.Error()}
+      alt.Errorf("%s: [%v] %v", s.name, req.Id, err)
+  }
+  
+  if req.Accepts("text/html") {
+    s.sendEntity(rsp, req, r, h, htmlError(r, h, c))
+  }else{
+    s.sendEntity(rsp, req, r, h, c)
   }
 }
 
@@ -169,47 +216,33 @@ func (s *Service) sendEntity(rsp http.ResponseWriter, req *Request, status int, 
     rsp.Header().Add("User-Agent", ua)
   }
   
-  switch e := content.(type) {
-    
-    case nil:
-      rsp.WriteHeader(status)
-    
-    case Entity:
-      rsp.Header().Add("Content-Type", e.ContentType())
-      rsp.WriteHeader(status)
-      
-      n, err := io.Copy(rsp, e)
-      if err != nil {
-        alt.Errorf("%s: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes written", s.name, err, req.Method, req.URL, n)
-        return
-      }
-      
-    case json.RawMessage:
-      rsp.Header().Add("Content-Type", "application/json")
-      rsp.WriteHeader(status)
-      
-      _, err := rsp.Write([]byte(e))
-      if err != nil {
-        alt.Errorf("%s: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes", s.name, err, req.Method, req.URL, len(e))
-        return
-      }
-      
-    default:
-      rsp.Header().Add("Content-Type", "application/json")
-      rsp.WriteHeader(status)
-      
-      data, err := json.Marshal(content)
-      if err != nil {
-        alt.Errorf("%s: Could not marshal entity: %v\nIn response to: %v %v", s.name, err, req.Method, req.URL)
-        return
-      }
-      
-      _, err = rsp.Write(data)
-      if err != nil {
-        alt.Errorf("%s: Could not write entity: %v\nIn response to: %v %v\nEntity: %d bytes", s.name, err, req.Method, req.URL, len(data))
-        return
-      }
-      
+  var err error
+  if s.entityHandler != nil {
+    err = s.entityHandler(rsp, req.Request, status, content)
+  }else{
+    err = DefaultEntityHandler(rsp, req.Request, status, content)
+  }
+  if err != nil {
+    alt.Errorf("%s: %v", s.name, err)
+    return
   }
   
+}
+
+/**
+ * Produce a HTML error entity
+ */
+func htmlError(status int, headers map[string]string, content error) Entity {
+  
+  e := content.Error()
+  e  = strings.Replace(e, "&", "&amp;", -1)
+  e  = strings.Replace(e, "<", "&lt;", -1)
+  e  = strings.Replace(e, ">", "&gt;", -1)
+  
+  m := `<html><body>`
+  m += `<h1>`+ fmt.Sprintf("%v %v", status, http.StatusText(status)) +`</h1>`
+  m += `<p><pre>`+ e +`</pre></p>`
+  m += `</body></html>`
+  
+  return NewBytesEntity("text/html", []byte(m))
 }

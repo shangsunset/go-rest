@@ -3,6 +3,7 @@ package rest
 import (
   "fmt"
   "time"
+  "strings"
   "net/http"
   "encoding/base64"
 )
@@ -103,6 +104,22 @@ func (r *Request) Resource() string {
   }else{
     return r.URL.Path
   }
+}
+
+/**
+ * Determine if the specified content type is explicitly accepted
+ */
+func (r *Request) Accepts(ctype string) bool {
+  h := r.Header.Get("Accept")
+  if h != "" {
+    parts := strings.Split(h, ",")
+    for _, p := range parts {
+      if strings.EqualFold(strings.TrimSpace(p), ctype) {
+        return true
+      }
+    }
+  }
+  return false
 }
 
 /**

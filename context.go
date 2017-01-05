@@ -143,3 +143,10 @@ func (c *Context) handle(rsp http.ResponseWriter, req *Request, h Handler) {
   }
   
 }
+
+/**
+ * Create a subrouter that can be configured for specialized use
+ */
+func (c *Context) Subrouter(p string) *mux.Router {
+  return c.router.PathPrefix(p).Subrouter()
+}
