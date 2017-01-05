@@ -218,9 +218,9 @@ func (s *Service) sendEntity(rsp http.ResponseWriter, req *Request, status int, 
   
   var err error
   if s.entityHandler != nil {
-    err = s.entityHandler(rsp, req.Request, status, content)
+    err = s.entityHandler(rsp, req, status, content)
   }else{
-    err = DefaultEntityHandler(rsp, req.Request, status, content)
+    err = DefaultEntityHandler(rsp, req, status, content)
   }
   if err != nil {
     alt.Errorf("%s: %v", s.name, err)

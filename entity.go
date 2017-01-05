@@ -41,12 +41,12 @@ func (e BytesEntity) ContentType() string {
 /**
  * An entity handler
  */
-type EntityHandler func(http.ResponseWriter, *http.Request, int, interface{})(error)
+type EntityHandler func(http.ResponseWriter, *Request, int, interface{})(error)
 
 /**
  * The default entity handler
  */
-func DefaultEntityHandler(rsp http.ResponseWriter, req *http.Request, status int, content interface{}) error {
+func DefaultEntityHandler(rsp http.ResponseWriter, req *Request, status int, content interface{}) error {
   switch e := content.(type) {
     
     case nil:
