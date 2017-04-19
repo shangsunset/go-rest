@@ -8,10 +8,6 @@ import (
   "encoding/base64"
 )
 
-import (
-  "bitbucket.org/madebymess/go-util"
-)
-
 /**
  * Attributes
  */
@@ -64,7 +60,7 @@ func newRequest(r *http.Request) *Request {
  * Create a service request
  */
 func newRequestWithAttributes(r *http.Request, a Attrs) *Request {
-  id := util.TimeUUID()
+  id := TimeUUID()
   return &Request{r, base64.RawURLEncoding.EncodeToString(id[:]), a, 0, time.Now()}
 }
 
